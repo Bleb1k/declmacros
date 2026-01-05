@@ -507,9 +507,16 @@ int main(int argc, char **argv) {
   
   bool *force_cpp = flag_bool("E", false, "forces cpp to run after this, taking all cc flags");
   (void)flag_bool("quiet", false, "cc flag");
+  bool *preprocessed = flag_bool("fpreprocessed", false, "cc flag");
   char **mtune = flag_str("mtune", NULL, "cc flag");
   char **march = flag_str("march", NULL, "cc flag");
-  bool *preprocessed = flag_bool("fpreprocessed", false, "cc flag");
+  (void)flag_str("imultiarch", NULL, "cc flag");
+  bool *asynchronous_unwind_tables = flag_bool("fasynchronous-unwind-tables", false, "cc flag");
+  bool *stack_protector_strong = flag_bool("fstack-protector-strong", false, "cc flag");
+  bool *Wformat = flag_bool("Wformat", false, "cc flag");
+  bool *Wformat_security = flag_bool("Wformat-security", false, "cc flag");
+  bool *stack_clash_protection = flag_bool("fstack-clash-protection", false, "cc flag");
+  bool *fcf_protection = flag_bool("fcf-protection", false, "cc flag");
   char **dumpdir = flag_str("dumpdir", NULL, "cc flag");
   char **dumpbase = flag_str("dumpbase", NULL, "cc flag");
   char **dumpbase_ext = flag_str("dumpbase-ext", NULL, "cc flag");
@@ -728,9 +735,15 @@ int main(int argc, char **argv) {
     Nob_Cmd cmd = {0};
     nob_cmd_append(&cmd, "cpp");
     nob_cmd_append(&cmd, intermediate_out_file);
-    if (mtune != NULL) nob_cmd_append(&cmd, nob_temp_sprintf("-mtune=%s", *mtune));
-    if (march != NULL) nob_cmd_append(&cmd, nob_temp_sprintf("-march=%s", *march));
-    if (march != NULL) nob_cmd_append(&cmd, "-o", *output);
+    if (*mtune != NULL) nob_cmd_append(&cmd, nob_temp_sprintf("-mtune=%s", *mtune));
+    if (*march != NULL) nob_cmd_append(&cmd, nob_temp_sprintf("-march=%s", *march));
+    if (*asynchronous_unwind_tables) nob_cmd_append(&cmd, "-fasynchronous-unwind-tables");
+    if (*stack_protector_strong) nob_cmd_append(&cmd, "-fstack-protector-strong");
+    if (*Wformat) nob_cmd_append(&cmd, "-Wformat");
+    if (*Wformat_security) nob_cmd_append(&cmd, "-Wformat-security");
+    if (*stack_clash_protection) nob_cmd_append(&cmd, "-fstack-clash-protection");
+    if (*fcf_protection) nob_cmd_append(&cmd, "-fcf-protection");
+    nob_cmd_append(&cmd, "-o", *output);
     if (!nob_cmd_run(&cmd)) return 1;
     return 0;
   } else {
