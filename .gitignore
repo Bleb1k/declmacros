@@ -2,4 +2,4 @@ build/
 nob
 nob.old
 .cache/
-compile_commands
+compile_commands.json

@@ -51,7 +51,7 @@ const char *TokenKindStr(TokenKind t) {
   Tokens
   #undef X
   }
-  return "";
+  return nob_temp_sprintf("<unknown %d>", t);
 }
 
 typedef struct Token {
@@ -74,7 +74,7 @@ bool next_token(ParseSlice *sv, Token *token) {
         TAKE(RANGEi('a', 'z') || RANGEi('A', 'Z') || JUST('_'),
              identifier) else
         SKIP(JUST('\\'), saw_backslash) else
-        SKIP(JUST('#'), macro) else
+        TAKE(JUST('#'), macro) else
         CONTINUE(atoms));
   STATE(atoms,
         TAKE(JUST('0'), number_choice) else
@@ -134,24 +134,27 @@ bool next_token(ParseSlice *sv, Token *token) {
   STATE(macro,
         SKIP(JUST(' '), macro) else
         RETURN(JUST('\n'), invalid) else
-        TAKE(RANGEi('a', 'z') || RANGEi('0', '9'), macro_identifier) else
+        SKIP(RANGEi('a', 'z') || RANGEi('0', '9'), macro_identifier) else
         RETURN(1, invalid));
   STATE(macro_identifier,
         SKIP(RANGEi('a', 'z'), macro_identifier) else
         SELECT(macro_identifier));
   STATE(detect_keywords,
+        token->slice.count -= count;
         WHEN(STR("typedef"), SELECT(kw_typedef)) else
         WHEN(STR("struct"), SELECT(kw_struct)) else
         WHEN(STR("enum"), SELECT(kw_enum)) else
         WHEN(STR("union"), SELECT(kw_union)) else
         WHEN(STR("return"), SELECT(kw_return)) else
-        CONTINUE(detect_keywords_2));
+        CONTINUE(detect_keywords_2);
+        token->slice.count += count);
   STATE(detect_keywords_2,
         WHEN(STR("sizeof"), SELECT(kw_sizeof)) else
         WHEN(STR("if"), SELECT(kw_if)) else
         WHEN(STR("for"), SELECT(kw_for)) else
         WHEN(STR("while"), SELECT(kw_while)) else
-        WHEN(STR("do"), SELECT(kw_do)));
+        WHEN(STR("do"), SELECT(kw_do));
+        token->slice.count += count);
   STATE(string_literal,
         RETURN(JUST('"'), string_literal) else
         SKIP(JUST('\\'), string_literal_backslash) else
@@ -223,6 +226,7 @@ bool next_token(ParseSlice *sv, Token *token) {
         CONTINUE(multi_line_comment));
 
   ParserEnd();
+  // dump_token(*token);
   return result;
 }
 
@@ -233,10 +237,10 @@ bool next_token(ParseSlice *sv, Token *token) {
 #define TRY_NEXT_TOKEN()                                                       \
   if (!next_token(&src, &tok)) {                                               \
     nob_log(NOB_ERROR, "Unexpected EOF");                                      \
-    exit(1);                                                                   \
+    abort();                                                                   \
   }
 
-#define REWIND_TOKEN() src.count += tok.slice.count; src.data -= tok.slice.count;
+#define REWIND_TOKEN() src.count += tok.slice.count; src.data -= tok.slice.count
 
 #define EXPECT_KIND_AND_STR(kind_, str_)                                       \
   if (                                                                         \
@@ -251,14 +255,29 @@ bool next_token(ParseSlice *sv, Token *token) {
       (int)tok.slice.count,                                                    \
       (char*)tok.slice.data                                                    \
     );                                                                         \
-    exit(1);                                                                   \
+    abort();                                                                   \
   }
-#define EXPECT_KIND_AND_STR_OPT(kind_, str_)                             \
+#define EXPECT_KIND_AND_STR_OPT(kind_, str_)                                   \
   if (                                                                         \
     tok.kind != TOKEN_KIND_(kind_)                                             \
     || !ParseSlice_cstr_cmp(tok.slice, cstr(str_))                             \
   ) {                                                                          \
     REWIND_TOKEN();                                                            \
+  }
+#define EXPECT_KIND_AND_STR_OR_RET(kind_, str_, ret_)                          \
+  if (                                                                         \
+    tok.kind != TOKEN_KIND_(kind_)                                             \
+    || !ParseSlice_cstr_cmp(tok.slice, cstr(str_))                             \
+  ) {                                                                          \
+    nob_log(                                                                   \
+      NOB_ERROR,                                                               \
+      __FILE__ ":%d Expected " #kind_ " " str_ ", got %s `%.*s`",              \
+      __LINE__,                                                                \
+      TokenKindStr(tok.kind),                                                  \
+      (int)tok.slice.count,                                                    \
+      (char*)tok.slice.data                                                    \
+    );                                                                         \
+    return ret_;                                                               \
   }
 
 #define EXPECT_KIND(kind_)                                                     \
@@ -273,18 +292,33 @@ bool next_token(ParseSlice *sv, Token *token) {
       (int)tok.slice.count,                                                    \
       (char*)tok.slice.data                                                    \
     );                                                                         \
-    exit(1);                                                                   \
+    abort();                                                                   \
   }
-#define EXPECT_KIND_OR_REWIND(kind_)                                                     \
+#define EXPECT_KIND_OPT(kind_)                                                 \
   if (tok.kind != TOKEN_KIND_(kind_)) { REWIND_TOKEN(); }
+#define EXPECT_KIND_OR_RET(kind_, ret_)                                        \
+  if (tok.kind != TOKEN_KIND_(kind_)) {                                        \
+    nob_log(                                                                   \
+      NOB_ERROR,                                                               \
+      __FILE__ ":%d Expected " #kind_ ", got %s `%.*s`",                       \
+      __LINE__,\
+      TokenKindStr(tok.kind),                                                  \
+      (int)tok.slice.count,                                                    \
+      (char*)tok.slice.data                                                    \
+    );                                                                         \
+    return ret_;                                                               \
+  }
 
 #define TRY_NEXT_AND_EXPECT_KIND(kind_) TRY_NEXT_TOKEN(); EXPECT_KIND(kind_);
-#define TRY_NEXT_AND_EXPECT_KIND_OPT(kind_) TRY_NEXT_TOKEN(); EXPECT_KIND_OR_REWIND(kind_);
+#define TRY_NEXT_AND_EXPECT_KIND_OPT(kind_) TRY_NEXT_TOKEN(); EXPECT_KIND_OPT(kind_);
+#define TRY_NEXT_AND_EXPECT_KIND_OR_RET(kind_, ret_) TRY_NEXT_TOKEN(); EXPECT_KIND_OR_RET(kind_, ret_);
 #define TRY_NEXT_AND_EXPECT_KIND_AND_STR(kind_, str_) TRY_NEXT_TOKEN(); EXPECT_KIND_AND_STR(kind_, str_);
 #define TRY_NEXT_AND_EXPECT_KIND_AND_STR_OPT(kind_, str_) TRY_NEXT_TOKEN(); EXPECT_KIND_AND_STR_OPT(kind_, str_);
+#define TRY_NEXT_AND_EXPECT_KIND_AND_STR_OR_RET(kind_, str_, ret_) TRY_NEXT_TOKEN(); EXPECT_KIND_AND_STR_OR_RET(kind_, str_, ret_);
 
 typedef struct DefItem {
   ParseSlice name, type;
+  bool pointer;
 } DefItem;
 
 typedef struct DefItems {
@@ -302,7 +336,7 @@ typedef struct TypedefAst {
   enum {
     TDKind_invalid,
     TDKind_struc,
-    TDKind_ident,
+    TDKind_alias,
   } kind;
   union {
     StructAst struc;
@@ -310,30 +344,51 @@ typedef struct TypedefAst {
   };
 } TypedefAst;
 
+typedef struct TypedefAsts {
+  TypedefAst *items;
+  size_t count, capacity;
+} TypedefAsts;
+
+typedef struct DeclAst {
+  ParseSlice src;
+  enum {
+    DECLKind_debug       = 1 << 0,
+    DECLKind_byte_bitmap = 1 << 1,
+  } kinds;
+} DeclAst;
+
 bool parse_struct(ParseSlice *src_p, StructAst *out) {
   ParseSlice src = *src_p;
   Token tok = {0};
-  TRY_NEXT_AND_EXPECT_KIND(kw_struct);
+  TRY_NEXT_AND_EXPECT_KIND_OR_RET(kw_struct, false);
   TRY_NEXT_AND_EXPECT_KIND_OPT(identifier);
   if (tok.kind == TokenKind_identifier) {
     *(ParseSlice*)(void*)out = tok.slice;
   }
   TRY_NEXT_AND_EXPECT_KIND_AND_STR_OPT(punctuation, "{");
   if (tok.kind != TokenKind_punctuation) {
-    ((TypedefAst*)(void*)((char*)(void*)out - 40))->kind = TDKind_ident;
+    ((TypedefAst*)(void*)((char*)(void*)out - 40))->kind = TDKind_alias;
   } else {
     TRY_NEXT_TOKEN()
     while (tok.kind != TokenKind_punctuation || !ParseSlice_cstr_cmp(tok.slice, cstr("}"))) {
       DefItem it = {0};
       if (tok.kind != TokenKind_identifier) {
-        fprintf(stderr, "decl only support structs with simple types: `int name`\n");
+        fprintf(stderr, "decl only support structs with types with 0 or 1 indirection levels: `type [*] name`\n");
         fprintf(stderr, "typ; unsupported: `%.*s` (%s)\n", tok.slice.count > 25 ? 25 : (int)tok.slice.count, (char*)tok.slice.data, TokenKindStr(tok.kind));
         return false;
       }
       it.type = tok.slice;
       TRY_NEXT_TOKEN();
+      if (tok.kind == TokenKind_math_op) {
+        if (!ParseSlice_cstr_cmp(tok.slice, cstr("*"))) {
+          fprintf(stderr, "ptr; unexpected ptr symbol: `%.*s`, expected `*`", (int)tok.slice.count, (char*)tok.slice.data);
+          return false;
+        }
+        it.pointer = true;
+        TRY_NEXT_TOKEN();
+      }
       if (tok.kind != TokenKind_identifier) {
-        fprintf(stderr, "decl only support structs with simple types: `int name`\n");
+        fprintf(stderr, "decl only support structs with types with 0 or 1 indirection levels: `type [*] name`\n");
         fprintf(stderr, "nam; unsupported: `%.*s` (%s)\n", tok.slice.count > 25 ? 25 : (int)tok.slice.count, (char*)tok.slice.data, TokenKindStr(tok.kind));
         return false;
       }
@@ -343,7 +398,7 @@ bool parse_struct(ParseSlice *src_p, StructAst *out) {
         tok.kind != TokenKind_punctuation
         || !ParseSlice_cstr_cmp(tok.slice, cstr(";"))
       ) {
-        fprintf(stderr, "decl only support structs with simple types: `int name`\n");
+        fprintf(stderr, "decl only support structs with types with 0 or 1 indirection levels: `type [*] name`\n");
         fprintf(stderr, "pun; unsupported: `%.*s` (%s)\n", tok.slice.count > 25 ? 25 : (int)tok.slice.count, (char*)tok.slice.data, TokenKindStr(tok.kind));
         return false;
       }
@@ -360,7 +415,7 @@ bool parse_struct(ParseSlice *src_p, StructAst *out) {
 bool parse_typedef(ParseSlice *src_p, TypedefAst *out) {
   ParseSlice src = *src_p;
   Token tok = {0};
-  TRY_NEXT_AND_EXPECT_KIND(kw_typedef);
+  TRY_NEXT_AND_EXPECT_KIND_OR_RET(kw_typedef, false);
   TRY_NEXT_TOKEN();
   switch (tok.kind) {
     case TokenKind_kw_struct: 
@@ -373,15 +428,43 @@ bool parse_typedef(ParseSlice *src_p, TypedefAst *out) {
       break;
     case TokenKind_identifier:
       out->ident = tok.slice;
-      out->kind = TDKind_ident;
+      out->kind = TDKind_alias;
       break;
     default:
       printf("unsupported: `%.*s` (%s)\n", tok.slice.count > 25 ? 25 : (int)tok.slice.count, (char*)tok.slice.data, TokenKindStr(tok.kind));
       return false;
   }
-  TRY_NEXT_AND_EXPECT_KIND(identifier);
+  TRY_NEXT_AND_EXPECT_KIND_OR_RET(identifier, false);
   out->name = tok.slice;
-  TRY_NEXT_AND_EXPECT_KIND_AND_STR(punctuation, ";");
+  TRY_NEXT_AND_EXPECT_KIND_AND_STR_OR_RET(punctuation, ";", false);
+  out->src.data = src_p->data;
+  out->src.count = src.data - src_p->data;
+  *src_p = src;
+  return true;
+}
+
+bool parse_decl(ParseSlice *src_p, DeclAst *out) {
+  ParseSlice src = *src_p;
+  Token tok = {0};
+  TRY_NEXT_AND_EXPECT_KIND_AND_STR_OR_RET(macro_identifier, "#decl", false);
+  TRY_NEXT_AND_EXPECT_KIND_AND_STR_OR_RET(punctuation, "(", false);
+  for (;;) {
+    TRY_NEXT_AND_EXPECT_KIND_OR_RET(identifier, false);
+    if (ParseSlice_cstr_cmp(tok.slice, cstr("debug"))) {
+      out->kinds |= DECLKind_debug;
+    } else if (ParseSlice_cstr_cmp(tok.slice, cstr("byte_bitmap"))) {
+      out->kinds |= DECLKind_byte_bitmap;
+    } else {
+      nob_log(NOB_ERROR, "unexpected decl macro: %.*s", (int)tok.slice.count, (char*)tok.slice.data);
+      abort();
+    }
+    TRY_NEXT_TOKEN();
+    if (tok.kind != TokenKind_punctuation || !ParseSlice_cstr_cmp(tok.slice, cstr(","))) {
+      REWIND_TOKEN();
+      break;
+    }
+  }
+  TRY_NEXT_AND_EXPECT_KIND_AND_STR_OR_RET(punctuation, ")", false);
   out->src.data = src_p->data;
   out->src.count = src.data - src_p->data;
   *src_p = src;
@@ -457,7 +540,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Error: malformed input\n");
     fprintf(stderr, "Usage: %s [options] input_file\nOptions:\n", flag_program_name());
     flag_print_options(stderr);
-    exit(1);
+    abort();
   }
 
   nob_minimal_log_level = NOB_ERROR;
@@ -489,109 +572,152 @@ int main(int argc, char **argv) {
   
   nob_da_append_many(&types, known_types, NOB_ARRAY_LEN(known_types));
 
+  bool byte_bitmap_typedef_exists = false;
+  TypedefAsts init_byte_bitmap_targets = {0};
+
   Nob_String_Builder out = {0};
   Token tok = {0};
   while (next_token(&src, &tok)) {
     switch (tok.kind) {
-      case TokenKind_macro_identifier: {
-        if (ParseSlice_cstr_cmp(tok.slice, cstr("decl"))) {
-          TRY_NEXT_AND_EXPECT_KIND_AND_STR(punctuation, "(");
-          TRY_NEXT_AND_EXPECT_KIND(identifier);
-          if (ParseSlice_cstr_cmp(tok.slice, cstr("debug"))) {
-            TRY_NEXT_AND_EXPECT_KIND_AND_STR(punctuation, ")");
-            TRY_NEXT_TOKEN();
-            switch (tok.kind) {
-            case TokenKind_kw_typedef: {
-              REWIND_TOKEN();
-              TypedefAst td = {0};
-              if (parse_typedef(&src, &td)) {
-                nob_sb_append_buf(&out, td.src.data, td.src.count);
-                const char *typename = nob_temp_sv_to_cstr((Nob_String_View){td.name.count, td.name.data});
-                switch (td.kind) {
-                case TDKind_struc:
-                  nob_sb_appendf(&out,
-                    "\nstatic inline void %s__debug(%s it) { ",
-                    typename, typename
-                  );
-                  nob_da_foreach(DefItem, it, &td.struc.items) {
-                    const char* itname = nob_temp_sv_to_cstr((Nob_String_View){it->name.count, it->name.data});
-                    TypePrinter ittype = type_slice_to_cstr_label(it->type);
-                    switch (ittype.kind) {
-                    case TypePrKind_simple:
-                      nob_sb_appendf(&out,
-                        " fprintf(stdout, \"%s%s: %%%s\", it.%s);",
-                        ((void*)it != td.struc.items.items) ? ", " : "", itname, ittype.to, itname
-                      );
-                      break;
-                    case TypePrKind_struct:
-                      nob_sb_appendf(&out,
-                        " fprintf(stdout, \"%s%s: \");",
-                        ((void*)it != td.struc.items.items) ? ", " : "", itname
-                      );
-                      nob_sb_appendf(&out,
-                        " %.*s_debug(it.%s);",
-                        // " fprintf(stdout, \"%s%s: %%%s\", it.%s);",
-                        (int)ittype.from.count, (char*)ittype.from.data, itname
-                      );
-                      break;
-                    default: NOB_UNREACHABLE("Invalid TypePrinter kind");
-                    }
-                  }
-                  nob_sb_append_cstr(&out, " }\n");
-                  nob_sb_appendf(&out,
-                    "void %s_debug(%s it) { fprintf(stdout, \"%s{ \"); %s__debug(it); fprintf(stdout, \" }\"); }\n",
-                    typename, typename, typename, typename
-                  );
-                  break;
-                case TDKind_ident:
-                  nob_sb_appendf(&out,
-                    "\nvoid %s_debug(%s it) { fprintf(stdout, \"%s{ \"); %.*s__debug(it); fprintf(stdout, \" }\"); }\n",
-                    typename, typename, typename, (int)td.ident.count, (char*)td.ident.data
-                  );
-                  break;
-                default: NOB_UNREACHABLE("unhandled typedef kind");
-                }
-                nob_da_append(&types, ((TypePrinter){TypePrKind_struct, td.name, NULL}));
-              } else {
-                fprintf(stderr, "didn't parse typedef lmao\n");
-                continue;
-              };
-              break;
+    case TokenKind_macro_identifier: {
+      if (ParseSlice_cstr_cmp(tok.slice, cstr("#decl"))) {
+        REWIND_TOKEN();
+        DeclAst decl = {0};
+        if (!parse_decl(&src, &decl)) abort();
+        TypedefAst td = {0};
+        if (!parse_typedef(&src, &td)) abort();
+        const char *typename = nob_temp_sv_to_cstr((Nob_String_View){td.name.count, td.name.data});
+        
+        nob_sb_append_buf(&out, td.src.data, td.src.count);
+        if (decl.kinds & DECLKind_debug) {
+          switch (td.kind) {
+          case TDKind_struc:
+            nob_sb_appendf(&out,
+              "\nstatic inline void %s__debug(%s it) { ",
+              typename, typename
+            );
+            nob_da_foreach(DefItem, it, &td.struc.items) {
+              const char* itname = nob_temp_sv_to_cstr((Nob_String_View){it->name.count, it->name.data});
+              TypePrinter ittype = type_slice_to_cstr_label(it->type);
+              switch (ittype.kind) {
+              case TypePrKind_simple:
+                nob_sb_appendf(&out,
+                  " fprintf(stdout, \"%s%s: %%%s\", it.%s);",
+                  ((void*)it != td.struc.items.items) ? ", " : "", itname, ittype.to, itname
+                );
+                break;
+              case TypePrKind_struct:
+                nob_sb_appendf(&out,
+                  " fprintf(stdout, \"%s%s: \");",
+                  ((void*)it != td.struc.items.items) ? ", " : "", itname
+                );
+                nob_sb_appendf(&out,
+                  " %.*s_debug(it.%s);",
+                  (int)ittype.from.count, (char*)ittype.from.data, itname
+                );
+                break;
+              default: NOB_UNREACHABLE("Invalid TypePrinter kind");
+              }
             }
-            default:
-              printf("fuck: `%.*s` (%s)\n", tok.slice.count > 25 ? 25 : (int)tok.slice.count, (char*)tok.slice.data, TokenKindStr(tok.kind));
-              return 1;
-            }
+            nob_sb_append_cstr(&out, " }\n");
+            nob_sb_appendf(&out,
+              "void %s_debug(%s it) { fprintf(stdout, \"%s{ \"); %s__debug(it); fprintf(stdout, \" }\"); }\n",
+              typename, typename, typename, typename
+            );
             break;
-          } else if (ParseSlice_cstr_cmp(tok.slice, cstr("byte_bitmap"))) {
-            TRY_NEXT_AND_EXPECT_KIND_AND_STR(punctuation, ")");
-            NOB_TODO("holy fuck, it's a pointer bitmap, I need a map<string, type_init_macro> 0_0");
-          } else {
-            nob_log(
-              NOB_ERROR,
-              THIS_FILE ":%d Expected `debug` or `pointer_mask`, got `%.*s`",
-              THIS_LINE,
-              (int)tok.slice.count,
-              (char*)tok.slice.data
-            );                                                                         
-            exit(1);                                                                   
+
+          case TDKind_alias:
+            nob_sb_appendf(&out,
+              "\nvoid %s_debug(%s it) { fprintf(stdout, \"%s{ \"); %.*s__debug(it); fprintf(stdout, \" }\"); }\n",
+              typename, typename, typename, (int)td.ident.count, (char*)td.ident.data
+            );
+            break;
+
+          default: NOB_UNREACHABLE("unhandled typedef kind");
           }
-          
+          nob_da_append(&types, ((TypePrinter){TypePrKind_struct, td.name, NULL}));
         }
-        nob_sb_append_cstr(&out, "\n#");
+        if (decl.kinds & DECLKind_byte_bitmap) {
+          if (!byte_bitmap_typedef_exists) {
+            byte_bitmap_typedef_exists = true;
+            nob_sb_appendf(&out, "\ntypedef unsigned long long int Byte_Bitmap;\n");
+          }
+          nob_sb_appendf(&out, "Byte_Bitmap %s_byte_bitmap = 0;\n", typename);
+          nob_da_append(&init_byte_bitmap_targets, td);
+        }
+        continue;
       }
-      // falls through
-      default:
+      nob_da_append(&out, '\n');
+      break;
+    }
+    case TokenKind_identifier: {
+      if (!ParseSlice_cstr_cmp(tok.slice, cstr("main"))) break;
+      nob_sb_append_buf(&out, tok.slice.data, tok.slice.count);
+      nob_da_append(&out, ' ');
+      TRY_NEXT_AND_EXPECT_KIND(punctuation);
+      if (!ParseSlice_cstr_cmp(tok.slice, cstr("("))) {
+        nob_log(NOB_ERROR, THIS_FILE ":%d expected `(`, got `%.*s`", THIS_LINE, (int)tok.slice.count, (char*)tok.slice.data);
+        abort();
+      }
+      
+      for (int depth = 1; depth;) {
         nob_sb_append_buf(&out, tok.slice.data, tok.slice.count);
         nob_da_append(&out, ' ');
-        break;
-        // printf("`%.*s` (%s)\n", tok.slice.count > 25 ? 25 : (int)tok.slice.count, (char*)tok.slice.data, TokenKindStr(tok.kind));
-        // return 1;
-      case TokenKind_include_string:
-        nob_sb_append_buf(&out, tok.slice.data, tok.slice.count);
-        nob_da_append(&out, '\n');
-        break;
+        TRY_NEXT_TOKEN();
+        
+        if (tok.kind != TokenKind_punctuation) continue;
+        if (ParseSlice_cstr_cmp(tok.slice, cstr("("))) depth += 1;
+        else if (ParseSlice_cstr_cmp(tok.slice, cstr(")"))) depth -= 1;
+      }
+      nob_sb_append_buf(&out, tok.slice.data, tok.slice.count);
+      nob_da_append(&out, ' ');
+      TRY_NEXT_AND_EXPECT_KIND_AND_STR(punctuation, "{");
+      nob_da_append(&out, '{');
+      if (init_byte_bitmap_targets.count > 0) {
+        nob_sb_append_cstr(&out, "\n#define __BB_SIZE__(n_) ((((sizeof(i0. n_) % sizeof(void*)) ? 1 : 0) + sizeof(i0. n_) / sizeof(void*)) * sizeof(void*))\n");
+        nob_da_foreach(TypedefAst, td, &init_byte_bitmap_targets) {
+          const char *typename = nob_temp_sv_to_cstr((Nob_String_View){td->name.count, td->name.data});
+          char *temp_accumulator = "";
+
+          nob_sb_appendf(&out,
+            "  {\n"
+            "    %s i0 = {0};\n"
+            "    int i1 = 0;\n",
+            typename);
+          nob_da_foreach(DefItem, it, &td->struc.items) {
+            if (it->pointer) {
+              if (*temp_accumulator) nob_sb_appendf(&out, "    i1 += %s;\n", temp_accumulator);
+              nob_sb_appendf(&out,
+                "    %s_byte_bitmap |= ((1 << sizeof(i0.%.*s)) - 1) << i1;\n",
+                typename,
+                (int)it->name.count,
+                (char*)it->name.data
+              );
+              temp_accumulator = "";
+            }
+            temp_accumulator = nob_temp_sprintf(
+              "%s%s__BB_SIZE__(%.*s)",
+              temp_accumulator,
+              !*temp_accumulator ? "" : " + ",
+              (int)it->name.count,
+              (char*)it->name.data
+            );
+          }
+          nob_sb_append_cstr(&out, "  }\n");
+        }
+        nob_sb_append_cstr(&out, "#undef __BB_SIZE__\n");
+      }
+      continue;
     }
+    case TokenKind_include_string:
+      nob_sb_append_buf(&out, tok.slice.data, tok.slice.count);
+      nob_da_append(&out, '\n');
+      continue;
+    default:
+      break;
+    }
+    nob_sb_append_buf(&out, tok.slice.data, tok.slice.count);
+    nob_da_append(&out, ' ');
   }
 
   // -E provided
@@ -601,8 +727,6 @@ int main(int argc, char **argv) {
 
     Nob_Cmd cmd = {0};
     nob_cmd_append(&cmd, "cpp");
-    // nob_cmd_append(&cmd, "-wrapper", "echo");
-    // nob_cmd_append(&cmd, "-E");
     nob_cmd_append(&cmd, intermediate_out_file);
     if (mtune != NULL) nob_cmd_append(&cmd, nob_temp_sprintf("-mtune=%s", *mtune));
     if (march != NULL) nob_cmd_append(&cmd, nob_temp_sprintf("-march=%s", *march));

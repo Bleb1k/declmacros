@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -5,7 +6,9 @@
 typedef struct Foo {
   int a;
   float *b;
-  intptr_t c;
+  double *c;
+  bool d;
+  intptr_t e;
 } Foo;
 // generates:
 /*
@@ -22,7 +25,7 @@ Byte_Bitmap Foo_byte_bitmap = NULL;
 */
 
 int main() {
-  printf("huh?: 0b%b\n", Foo_byte_bitmap);
+  printf("huh?: 0x%llx\n", Foo_byte_bitmap);
   return 0;
 }
 

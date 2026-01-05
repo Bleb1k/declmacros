@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
   };
 
   if (*clean) {
-    cmd_append(cmd, "rm", "-r");
+    cmd_append(cmd, "rm", "-rf");
     cmd_append(cmd,
       BUILD_DIR,
       "nob",
